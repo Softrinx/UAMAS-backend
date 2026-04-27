@@ -14,10 +14,12 @@ from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+import logging
 
 from api import db
 from api.utils import ai_create_assessment, ai_create_assessment_from_pdf, ALLOWED_QUESTION_TYPES
 from api.models import Assessment, Question, Submission, Answer, Result, TotalMarks, Course, Unit, Notes, Lecturer, Student, User
+from sqlalchemy.orm import joinedload
 
 import os
 import uuid
@@ -371,14 +373,21 @@ def get_assessment_submissions(assessment_id):
     This endpoint returns all submissions made by the student, including completed and in-progress ones.
     """
     user_id = get_jwt_identity()
+    logger = logging.getLogger(__name__)
+    logger.info(f"[GET_ASSESSMENT_SUBMISSIONS] Fetching submissions - Assessment: {assessment_id}, Lecturer: {user_id}")
 
     submissions_data = []
 
     # assessments created by the lecturer and are verified
     assessment = Assessment.query.get(assessment_id)
+    if not assessment:
+        logger.warning(f"[GET_ASSESSMENT_SUBMISSIONS] Assessment not found - Assessment: {assessment_id}")
+        return jsonify({'message': 'Assessment not found.'}), 404
 
     # iterate through all assessments and get submissions for each assessment
     submissions = Submission.query.filter_by(assessment_id=assessment.id).all()
+    logger.info(f"[GET_ASSESSMENT_SUBMISSIONS] Found {len(submissions)} submissions - Assessment: {assessment_id}")
+    
     for submission in submissions:
         submission_data = {
             'submission_id': submission.id,
@@ -416,15 +425,21 @@ def get_assessment_submissions(assessment_id):
 
     # combine the submissions with their results
     for submission in submissions_data:
-        results = Result.query.filter_by(assessment_id=submission['assessment_id'], student_id=submission['student_id']).all()
-        submission['results'] = [result.to_dict() for result in results]
-        for result in submission['results']:
-            question = Question.query.get(result['question_id'])
+        logger.info(f"[GET_ASSESSMENT_SUBMISSIONS] Fetching results - Submission: {submission['submission_id']}, Student: {submission['student_id']}")
+        results = Result.query.options(joinedload(Result.answer)).filter_by(assessment_id=submission['assessment_id'], student_id=submission['student_id']).all()
+        logger.info(f"[GET_ASSESSMENT_SUBMISSIONS] Found {len(results)} results - Submission: {submission['submission_id']}")
+        
+        submission['results'] = []
+        for result in results:
+            result_dict = result.to_dict()
+            logger.debug(f"[GET_ASSESSMENT_SUBMISSIONS] Processing result - Result ID: {result.id}, Has Answer: {result.answer is not None}, Has Image: {result.answer.image_path if result.answer else 'None'}")
+            question = Question.query.get(result_dict['question_id'])
             if question:
-                result['question_text'] = question.text
-                result['marks'] = question.marks
+                result_dict['question_text'] = question.text
+                result_dict['marks'] = question.marks
             else:
-                result['question_text'] = 'Unknown Question'
+                result_dict['question_text'] = 'Unknown Question'
+            submission['results'].append(result_dict)
 
     return jsonify(submissions_data), 200
 
@@ -435,11 +450,15 @@ def get_student_submissions(student_id):
     This endpoint returns all submissions made by the student, including completed and in-progress ones.
     """
     user_id = get_jwt_identity()
+    logger = logging.getLogger(__name__)
+    logger.info(f"[GET_STUDENT_SUBMISSIONS] Fetching student submissions - Student: {student_id}, Lecturer: {user_id}")
 
     submissions_data = []
 
     # Get all submissions for the specified student
     submissions = Submission.query.filter_by(student_id=student_id).all()
+    logger.info(f"[GET_STUDENT_SUBMISSIONS] Found {len(submissions)} submissions - Student: {student_id}")
+    
     for submission in submissions:
         submission_data = {
             'submission_id': submission.id,
@@ -454,15 +473,21 @@ def get_student_submissions(student_id):
         submission['total_marks'] = total_marks.total_marks if total_marks else 0
     # Combine the submissions with their results
     for submission in submissions_data:
-        results = Result.query.filter_by(assessment_id=submission['assessment_id'], student_id=submission['student_id']).all()
-        submission['results'] = [result.to_dict() for result in results]
-        for result in submission['results']:
-            question = Question.query.get(result['question_id'])
+        logger.info(f"[GET_STUDENT_SUBMISSIONS] Fetching results - Submission: {submission['submission_id']}, Student: {student_id}")
+        results = Result.query.options(joinedload(Result.answer)).filter_by(assessment_id=submission['assessment_id'], student_id=submission['student_id']).all()
+        logger.info(f"[GET_STUDENT_SUBMISSIONS] Found {len(results)} results - Submission: {submission['submission_id']}")
+        
+        submission['results'] = []
+        for result in results:
+            result_dict = result.to_dict()
+            logger.debug(f"[GET_STUDENT_SUBMISSIONS] Processing result - Result ID: {result.id}, Has Answer: {result.answer is not None}, Has Image: {result.answer.image_path if result.answer else 'None'}")
+            question = Question.query.get(result_dict['question_id'])
             if question:
-                result['question_text'] = question.text
-                result['marks'] = question.marks
+                result_dict['question_text'] = question.text
+                result_dict['marks'] = question.marks
             else:
-                result['question_text'] = 'Unknown Question'
+                result_dict['question_text'] = 'Unknown Question'
+            submission['results'].append(result_dict)
     return jsonify(submissions_data), 200
 
 @lec_blueprint.route('/submissions/<submission_id>', methods=['PUT'])

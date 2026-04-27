@@ -18,15 +18,53 @@ import os
 load_dotenv()
 bd_blueprint = Blueprint('bd', __name__)
 
-@bd_blueprint.route('/uploads/student_answers/<filename>')
+@bd_blueprint.route('/debug/upload-config', methods=['GET'])
+def debug_upload_config():
+    '''Debug endpoint to check upload configuration'''
+    upload_folder = current_app.config.get('UPLOAD_FOLDER', '')
+    student_answers_dir = os.path.join(upload_folder, 'student_answers')
+    
+    # List files in the directory
+    files = []
+    if os.path.exists(student_answers_dir):
+        files = os.listdir(student_answers_dir)[:10]  # First 10 files
+    
+    return jsonify({
+        'upload_folder': upload_folder,
+        'student_answers_dir': student_answers_dir,
+        'absolute_path': os.path.abspath(student_answers_dir),
+        'dir_exists': os.path.exists(student_answers_dir),
+        'sample_files': files,
+        'public_api_base_url': os.getenv('PUBLIC_API_BASE_URL', 'NOT SET'),
+        'cwd': os.getcwd()
+    }), 200
+
+@bd_blueprint.route('/uploads/student_answers/<filename>', methods=['GET'])
 def serve_student_answer_image(filename):
     '''
     Serve the uploaded student answer image.
     This endpoint allows serving the image files uploaded by students for their answers.
     The images are stored in the UPLOAD_FOLDER under 'student_answers'.
     '''
-    upload_folder = current_app.config['UPLOAD_FOLDER']
-    return send_from_directory(os.path.join(upload_folder, 'student_answers'), filename)
+    upload_folder = current_app.config.get('UPLOAD_FOLDER', '')
+    student_answers_dir = os.path.join(upload_folder, 'student_answers')
+    file_path = os.path.join(student_answers_dir, filename)
+    
+    # Log the request details for debugging
+    current_app.logger.info(f"[SERVE_IMAGE] Request for image: {filename}")
+    current_app.logger.info(f"[SERVE_IMAGE] Upload folder: {upload_folder}")
+    current_app.logger.info(f"[SERVE_IMAGE] Full path: {file_path}")
+    current_app.logger.info(f"[SERVE_IMAGE] File exists: {os.path.exists(file_path)}")
+    
+    if not os.path.exists(file_path):
+        current_app.logger.error(f"[SERVE_IMAGE] File not found: {file_path}")
+        return jsonify({'message': 'File not found.', 'path': file_path}), 404
+    
+    try:
+        return send_from_directory(student_answers_dir, filename)
+    except Exception as e:
+        current_app.logger.error(f"[SERVE_IMAGE] Error serving file: {str(e)}")
+        return jsonify({'message': 'Error serving file.', 'error': str(e)}), 500
 
 # endpoint for students & lecturers to get questions of an assessment
 @bd_blueprint.route('/assessments/<assessment_id>/questions', methods=['GET'])
@@ -153,16 +191,4 @@ def get_notes(unit_id):
         },
         'notes': [note.to_dict() for note in notes]
     }), 200
-
-@bd_blueprint.route('/uploads/student_answers/<path:filename>', methods=['GET'])
-def uploaded_answer_file(filename):
-    """
-    Serve uploaded student answer images.
-    Accessible at: /api/v1/bd/uploads/student_answers/<filename>
-    """
-    upload_dir = os.path.join(current_app.config.get('UPLOAD_FOLDER', ''), 'student_answers')
-    file_path = os.path.join(upload_dir, filename)
-    if not os.path.exists(file_path):
-        return jsonify({'message': 'File not found.'}), 404
-    return send_from_directory(upload_dir, filename)
 

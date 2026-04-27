@@ -69,27 +69,70 @@ def is_token_revoked(jti: str) -> bool:
     """
     return jti in revoked_tokens
 
+def education_quotes_random_generator():
+    """
+    returns random education quotes from the list
+    """
+    quotes = [
+      "The more that you read, the more things you will know, the more that you learn, the more places you’ll go. —Dr. Seuss",
+      "Education is one thing no one can take away from you. —Elin Nordegren",
+      "A simple but powerful reminder of the positive domino effect a good education can have on many aspects of a person’s life and outlook.",
+      "Education is the key that unlocks the golden door to freedom. —George Washington Carver",
+      "Give a man a fish and you feed him for a day; teach a man to fish and you feed him for a lifetime. —Maimonides",
+      "Education’s purpose is to replace an empty mind with an open one. —Malcolm Forbes",
+      "Education is what remains after one has forgotten what one has learned in school. —Albert Einstein",
+      "Education is not preparation for life; education is life itself. —John Dewey",
+      "The aim of education is the knowledge, not of facts, but of values. —William S. Burroughs",
+      "What makes a child gifted and talented may not always be good grades in school, but a different way of looking at the world and learning. —Chuck Grassley",
+      "“Education is the vaccine of violence. —Edward James Olmos",
+      "Learning is not compulsory… Neither is survival. —W. Edwards Demin",
+      "The purpose of education is to turn mirrors into windows. —Sydney J. Harris",
+      "Intelligence plus character — that is the goal of true education. —Martin Luther King Jr",
+      "Education is the most powerful weapon which you can use to change the world. —Nelson Mandela",
+      "A child without education is like a bird without wings. —Tibetan Proverb",
+      "The purpose of learning is growth, and our minds, unlike our bodies, can continue growing as we continue to live. —Mortimer Adler",
+      "The ability to read, write, and analyze; the confidence to stand up and demand justice and equality; the qualifications and connections to get your foot in the door and take your seat at the table — all of that starts with education. —Michelle Obama",
+      "The principal goal of education in the schools should be creating men and women who are capable of doing new things, not simply repeating what other generations have done. —Jean Piaget",
+      "The content of a book holds the power of education and it is with this power that we can shape our future and change lives. —Malala Yousafzai",
+      "Education makes a people easy to lead but difficult to drive; easy to govern, but impossible to enslave. —Peter Brougham",
+      "The goal of education is the advancement of knowledge and the dissemination of truth. —John F. Kennedy",
+      "Knowledge is power. Information is liberating. Education is the premise of progress in every society, in every family. —Kofi Annan",
+      "Education is the passport to the future, for tomorrow belongs to those who prepare for it today. —Malcolm X",
+      "Whatever the cost of our libraries, the price is cheap compared to that of an ignorant nation. ―Walter Cronkite",
+      "We learn from failure, not from success!― Bram Stoker",
+      "Learning is not attained by chance; it must be sought for with ardor and diligence.– Abigail Adams",
+      "Continuous learning is the minimum requirement for success in any field.  — Brian Tracy",
+      "Life is a succession of lessons which must be lived to be understood. – Helen Keller",
+      "The only place success comes before work is in the dictionary. – Vince Lombardi"
+    ]
+
+    index = random.randint(0, len(quotes) - 1)
+    return quotes[index]
+
 # send notification email to the user after creating an account successfully
 def send_account_creation_email(to_email: str, reciever_fname: str, reciever_lname: str) -> bool:
     try:
+        quote = education_quotes_random_generator()
         mail = Mail(current_app)
         # Control SMTP debugging based on configuration
         if not current_app.config.get('MAIL_DEBUG', False):
             # Disable SMTP debugging to prevent verbose output
             import smtplib
             smtplib.SMTP.debuglevel = 0
-        msg = Message("Welcome to the IntelliLearn!",
+        msg = Message("Welcome to the IntelliMark!",
                     sender=os.getenv('MAIL_USERNAME'),
                     recipients=[to_email])
         msg.body = f"""
     Dear {reciever_lname} {reciever_fname},
 
-    Welcome to the IntelliLearn! Your account has been created successfully.
+    Welcome to the IntelliMark! Your account has been created successfully.
     You can now log in using your institutional email.
 
-        link: https://intelli-mark-swart.vercel.app
+        link: https://intellimark.pages.dev/
 
     We look forward to supporting your learning journey.
+
+    {quote}
 
     Thank you,
     UAMAS Team
@@ -117,12 +160,12 @@ def send_verification_email(to_email: str, verification_code: str) -> bool:
             import smtplib
             smtplib.SMTP.debuglevel = 0
         msg = Message(
-            "IntelliLearn Email Verification",
+            "IntelliMark Email Verification",
             sender=os.getenv('MAIL_USERNAME'),
             recipients=[to_email]
         )
         msg.body = (
-            f"Your IntelliLearn verification code is: {verification_code}\n\n"
+            f"Your IntelliMark verification code is: {verification_code}\n\n"
             "This code will expire in 15 minutes. If you did not request this, "
             "you can ignore this email."
         )
@@ -141,7 +184,7 @@ def send_password_reset_email(to_email: str, reciever_fname: str, reciever_lname
             # Disable SMTP debugging to prevent verbose output
             import smtplib
             smtplib.SMTP.debuglevel = 0
-        msg = Message("IntelliLearn Password Reset",
+        msg = Message("IntelliMark Password Reset",
                     sender=os.getenv('MAIL_USERNAME'),
                     recipients=[to_email])
         msg.body = f"""

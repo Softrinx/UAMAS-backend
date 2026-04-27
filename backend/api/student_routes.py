@@ -14,6 +14,7 @@ from flask import Blueprint, request, jsonify, current_app, send_from_directory
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+import logging
 
 from api import db
 # from api.models import Assessment, Question, Submission, Answer, Result, TotalMarks, Course, Unit, Notes, User, Lecturer, Student, AttemptAssessment
@@ -23,6 +24,7 @@ from sqlalchemy.orm import joinedload
 
 import os
 import uuid
+import random
 # from datetime import datetime, timedelta
 from flask import request, jsonify, current_app, url_for
 from werkzeug.utils import secure_filename
@@ -57,33 +59,44 @@ def get_student_assessments():
     if not student:
         return jsonify({'message': 'Student not found.'}), 404
     
-    assessments = []
-    units = student.units
-    for unit in units:
-        unit_assessments = Assessment.query.filter_by(unit_id=unit.id, verified=True).all()
-        assessments.extend(unit_assessments)
+    # Batch fetch assessments for all units at once (instead of looping per unit)
+    unit_ids = [unit.id for unit in student.units]
+    if not unit_ids:
+        return jsonify({'message': 'No assessments found.'}), 404
+    
+    assessments = Assessment.query.filter(
+        Assessment.unit_id.in_(unit_ids),
+        Assessment.verified == True
+    ).all()
 
     if not assessments:
         return jsonify({'message': 'No assessments found.'}), 404
 
+    assessment_ids = [a.id for a in assessments]
+    
+    # Batch fetch all submissions for this student (single query instead of per-assessment)
+    submissions = Submission.query.filter(
+        Submission.assessment_id.in_(assessment_ids),
+        Submission.student_id == user_id
+    ).all()
+    submission_map = {s.assessment_id: s for s in submissions}
+    
+    # Batch fetch all answers upfront (single query)
+    all_answers = Answer.query.filter_by(student_id=user_id).all()
+    answered_question_ids = {answer.question_id for answer in all_answers}
+    answer_assessment_map = {answer.assessment_id for answer in all_answers}
+
     # build the payload
     payload = []
     for a in assessments:
-        # has the student submitted?
-        submission = Submission.query.filter_by(
-            assessment_id=a.id,
-            student_id=user_id
-        ).first()
+        # Check submission from pre-fetched map (no query)
+        submission = submission_map.get(a.id)
 
         if submission:
             status = 'completed'
         else:
-            # any answered questions?
-            ans = Answer.query.filter_by(
-                assessment_id=a.id,
-                student_id=user_id
-            ).first()
-            status = 'in-progress' if ans else 'start'
+            # Check if any answered questions exist in this assessment (no query)
+            status = 'in-progress' if a.id in answer_assessment_map else 'start'
 
         payload.append({
             'id': a.id,
@@ -111,14 +124,13 @@ def get_student_assessments():
             'status': status
         })
 
+        # shuffle the questions for each assessment
+        random.shuffle(payload[-1]['questions'])
+
     # tag each question with answered/not answered
     for asses in payload:
         for q in asses['questions']:
-            answered = Answer.query.filter_by(
-                question_id=q['id'],
-                student_id=student.id
-            ).first()
-            q['status'] = 'answered' if answered else 'not answered'
+            q['status'] = 'answered' if q['id'] in answered_question_ids else 'not answered'
     
     # print(payload[0].get('schedule_date'))
     # print(payload[1].get('schedule_date'))
@@ -131,14 +143,18 @@ def submit_answer(question_id):
     Submit an answer for a specific question in an assessment.
     """
     user_id = get_jwt_identity()
+    logger = logging.getLogger(__name__)
+    logger.info(f"[SUBMIT_ANSWER] Starting - Student: {user_id}, Question: {question_id}")
 
     question = Question.query.get(question_id)
     print(question, question_id)
     if not question:
+        logger.warning(f"[SUBMIT_ANSWER] Question not found: {question_id}")
         return jsonify({'message': 'Question not found.'}), 404
 
     assessment = Assessment.query.get(question.assessment_id)
     if not assessment:
+        logger.warning(f"[SUBMIT_ANSWER] Assessment not found: {question.assessment_id}")
         return jsonify({'message': 'Assessment not found.'}), 404
 
     # Prevent duplicate submissions
@@ -163,12 +179,15 @@ def submit_answer(question_id):
 
     try:
         if answer_type == 'image':
+            logger.info(f"[SUBMIT_ANSWER] Image response detected - Student: {user_id}, Question: {question_id}")
             if 'image' not in request.files:
+                logger.warning(f"[SUBMIT_ANSWER] No image file in request - Student: {user_id}")
                 return jsonify({'message': 'Image file is required for image answers.'}), 400
 
             image_file = request.files['image']
             original_filename = image_file.filename or ''
             if original_filename == '':
+                logger.warning(f"[SUBMIT_ANSWER] Empty filename - Student: {user_id}")
                 return jsonify({'message': 'Uploaded file must have a filename.'}), 400
 
             # extension check
@@ -176,15 +195,22 @@ def submit_answer(question_id):
             ext = ext.lower().lstrip('.')
             allowed = set(current_app.config.get('ALLOWED_EXTENSIONS', {'png','jpg','jpeg'}))
             if ext not in allowed:
-                return jsonify({'message': f'Invalid image type. Allowed: {", ".join(sorted(allowed))}'}), 400
+                logger.warning(f"[SUBMIT_ANSWER] Invalid extension '{ext}' - Student: {user_id}")
+                allowed_list = ", ".join(sorted(allowed))
+                return jsonify({'message': f"Invalid image type. Allowed: {allowed_list}"}), 400
+
+            logger.info(f"[SUBMIT_ANSWER] File extension valid: {ext} - Student: {user_id}")
 
             # size check - some WSGI servers provide content_length; if not, we read bytes
             image_file.stream.seek(0, os.SEEK_END)
             size = image_file.stream.tell()
             image_file.stream.seek(0)
             if size > MAX_IMAGE_BYTES:
+                logger.warning(f"[SUBMIT_ANSWER] Image too large ({size} bytes) - Student: {user_id}")
                 return jsonify({'message': f'Image too large. Max {MAX_IMAGE_BYTES} bytes.'}), 400
 
+            logger.info(f"[SUBMIT_ANSWER] Image size valid: {size} bytes - Student: {user_id}")
+            
             # secure filename and save
             filename = f"{uuid.uuid4().hex}_{secure_filename(original_filename)}"
             upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'student_answers')
@@ -192,13 +218,16 @@ def submit_answer(question_id):
             full_file_path = os.path.join(upload_dir, filename)
             image_file.save(full_file_path)
             image_filename = filename
+            logger.info(f"[SUBMIT_ANSWER] Image saved - Filename: {filename}, Path: {full_file_path}, Student: {user_id}")
 
             # Verify image is valid (Pillow)
             try:
                 with Image.open(full_file_path) as img:
                     img.verify()  # will raise if not an image
-            except Exception:
+                logger.info(f"[SUBMIT_ANSWER] Image validation passed - Student: {user_id}, Filename: {filename}")
+            except Exception as e:
                 # remove bad file
+                logger.error(f"[SUBMIT_ANSWER] Image validation failed - Error: {str(e)}, Student: {user_id}, Filename: {filename}")
                 try:
                     os.remove(full_file_path)
                 except Exception:
@@ -207,8 +236,10 @@ def submit_answer(question_id):
 
         else:
             # text answer path
+            logger.info(f"[SUBMIT_ANSWER] Text response detected - Student: {user_id}, Question: {question_id}")
             text_answer = data.get('text_answer', '')
             if not text_answer:
+                logger.warning(f"[SUBMIT_ANSWER] Empty text answer - Student: {user_id}")
                 return jsonify({'message': 'Text answer is required for text submissions.'}), 400
 
         # Save the raw answer
@@ -217,10 +248,11 @@ def submit_answer(question_id):
             assessment_id=assessment.id,
             student_id=user_id,
             text_answer=text_answer,
-            image_path=image_filename,   # store the filename (or full path if you prefer)
+            image_path=image_filename,
         )
         db.session.add(answer)
-        db.session.commit()  # commit so we have an answer record
+        db.session.commit()
+        logger.info(f"[SUBMIT_ANSWER] Answer saved to DB - Answer ID: {answer.id}, Student: {user_id}, Question: {question_id}, Image: {image_filename}")
 
         # Fetch student hobbies
         student = Student.query.filter_by(user_id=user_id).first()
@@ -228,6 +260,7 @@ def submit_answer(question_id):
 
         # Call grading function
         if text_answer:
+            logger.info(f"[SUBMIT_ANSWER] Grading text answer - Student: {user_id}, Question: {question_id}")
             grading_result, status = grade_text_answer(
                 text_answer=text_answer,
                 question_text=question.text,
@@ -238,6 +271,7 @@ def submit_answer(question_id):
             )
         else:
             # Pass the full file path so grader can open it
+            logger.info(f"[SUBMIT_ANSWER] Grading image answer - Student: {user_id}, Question: {question_id}, File: {full_file_path}")
             grading_result, status = grade_image_answer(
                 filename=full_file_path,
                 question_text=question.text,
@@ -246,12 +280,15 @@ def submit_answer(question_id):
                 marks=question.marks,
                 student_hobbies=student_hobbies
             )
+            logger.info(f"[SUBMIT_ANSWER] Image grading result - Status: {status}, Score: {grading_result.get('score')}, Student: {user_id}")
 
         if status != 200:
             # grader returned an error — keep the raw answer but surface the grader error
+            logger.error(f"[SUBMIT_ANSWER] Grading failed - Status: {status}, Student: {user_id}, Question: {question_id}, Error: {grading_result}")
             return jsonify(grading_result), status
 
         # persist result
+        logger.info(f"[SUBMIT_ANSWER] Saving result to DB - Score: {grading_result['score']}, Student: {user_id}, Question: {question_id}")
         result = Result(
             question_id=question.id,
             assessment_id=assessment.id,
@@ -261,6 +298,7 @@ def submit_answer(question_id):
         )
         db.session.add(result)
         db.session.commit()
+        logger.info(f"[SUBMIT_ANSWER] Result saved - Result ID: {result.id}, Student: {user_id}")
 
         return jsonify({
             'message': 'Answer submitted successfully.',
@@ -271,7 +309,8 @@ def submit_answer(question_id):
         }), 201
 
     except Exception as e:
-        current_app.logger.error("Error in submit_answer: %s\n%s", e, traceback.format_exc())
+        logger = logging.getLogger(__name__)
+        logger.error(f"[SUBMIT_ANSWER] Exception occurred - Student: {user_id}, Question: {question_id}, Error: {str(e)}, Traceback: {traceback.format_exc()}")
         try:
             db.session.rollback()
         except Exception:
@@ -350,41 +389,70 @@ def get_student_submissions():
     This endpoint returns all submissions made by the student, including completed and in-progress ones.
     """
     user_id = get_jwt_identity()
+    logger = logging.getLogger(__name__)
+    logger.info(f"[GET_SUBMISSIONS] Fetching submissions - Student: {user_id}")
 
     submissions = Submission.query.filter_by(student_id=user_id).all()
     if not submissions:
+        logger.warning(f"[GET_SUBMISSIONS] No submissions found - Student: {user_id}")
         return jsonify({'message': 'No submissions found for this student.'}), 404
+
+    submission_ids = [s.id for s in submissions]
+    assessment_ids = [s.assessment_id for s in submissions]
+    
+    # Batch fetch total marks (single query instead of per-submission)
+    total_marks_list = TotalMarks.query.filter(TotalMarks.submission_id.in_(submission_ids)).all()
+    total_marks_map = {tm.submission_id: tm for tm in total_marks_list}
+    
+    # Batch fetch all results (single query instead of per-submission)
+    results_list = Result.query.options(joinedload(Result.answer)).filter(
+        Result.assessment_id.in_(assessment_ids),
+        Result.student_id == user_id
+    ).all()
+    results_by_assessment = {}
+    for result in results_list:
+        if result.assessment_id not in results_by_assessment:
+            results_by_assessment[result.assessment_id] = []
+        results_by_assessment[result.assessment_id].append(result)
+    
+    # Batch fetch all questions (single query instead of per-result)
+    all_question_ids = [r.question_id for r in results_list]
+    questions = Question.query.filter(Question.id.in_(all_question_ids)).all() if all_question_ids else []
+    question_map = {q.id: q for q in questions}
+    
+    # Batch fetch all assessments (single query instead of per-submission)
+    assessments = Assessment.query.filter(Assessment.id.in_(assessment_ids)).all()
+    assessment_map = {a.id: a for a in assessments}
+
+    logger.info(f"[GET_SUBMISSIONS] Found {len(submissions)} submissions - Student: {user_id}")
 
     # combined the submissions with their total marks and results
     submissions_data = []
     for submission in submissions:
-        total_marks = TotalMarks.query.filter_by(submission_id=submission.id).first()
-        # include results alongside with corresponding question (take question_id from Result)
-        results = Result.query.filter_by(assessment_id=submission.assessment_id, student_id=user_id).all()
+        total_marks_entry = total_marks_map.get(submission.id)
+        results = results_by_assessment.get(submission.assessment_id, [])
 
-        print(results)
+        logger.info(f"[GET_SUBMISSIONS] Processing submission - Submission ID: {submission.id}, Student: {user_id}")
 
         results_data = []
         for result in results:
+            logger.debug(f"[GET_SUBMISSIONS] Processing result - Result ID: {result.id}, Has Answer: {result.answer is not None}, Has Image: {result.answer.image_path if result.answer else None}")
             result_dict = result.to_dict()
-            # Get the question for this result
-            question = Question.query.get(result.question_id)
+            # Get the question from pre-fetched map (no query)
+            question = question_map.get(result.question_id)
             result_dict['question_text'] = question.text if question else None
             result_dict['marks'] = question.marks if question else None
             result_dict['rubric'] = question.rubric if question else None
             result_dict['correct_answer'] = question.correct_answer if question else None
             results_data.append(result_dict)
 
-        # fetch unit id for the submission's assessment
-        assessment = Assessment.query.get(submission.assessment_id)
-        unit_id = assessment.unit_id if assessment else None
+        # Get assessment from pre-fetched map (no query)
+        assessment = assessment_map.get(submission.assessment_id)
         
-        # assessment topic, number_of_questions, difficulty, deadline, duration, blooms_level, created_at
-        assessment = Assessment.query.get(submission.assessment_id)
         if assessment:
             submission_data = {
                 'assessment_id': assessment.id,
-                'unit_id': unit_id,
+                'unit_id': assessment.unit_id,
                 'topic': assessment.topic,
                 'number_of_questions': assessment.number_of_questions,
                 'difficulty': assessment.difficulty,
@@ -396,6 +464,7 @@ def get_student_submissions():
         else:
             submission_data = {
                 'assessment_id': submission.assessment_id,
+                'unit_id': None,
                 'topic': None,
                 'number_of_questions': None,
                 'difficulty': None,
@@ -405,14 +474,12 @@ def get_student_submissions():
                 'created_at': None,
             }
 
-        submission_data = {
+        submission_data.update({
             'submission_id': submission.id,
-            'assessment_id': submission.assessment_id,
             'graded': submission.graded,
-            'total_marks': total_marks.total_marks if total_marks else 0,
+            'total_marks': total_marks_entry.total_marks if total_marks_entry else 0,
             'results': results_data,
-            **submission_data
-        }
+        })
         submissions_data.append(submission_data)
 
     return jsonify(submissions_data), 200

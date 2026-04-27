@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy.orm import foreign
 
+from sqlalchemy.dialects.postgresql import JSONB
+
 class User(db.Model):
     __tablename__ = 'users'
 
@@ -59,7 +61,8 @@ class Student(db.Model):
     firstname     = db.Column(db.String(50), nullable=False)
     surname       = db.Column(db.String(50), nullable=False)
     othernames    = db.Column(db.String(50))
-    hobbies       = db.Column(db.JSON, default=list)
+    # hobbies       = db.Column(db.JSON, default=list)
+    hobbies = db.Column(JSONB, default=list)
 
     # student relates directly to units
     units = db.relationship(

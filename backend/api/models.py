@@ -1,8 +1,11 @@
 import uuid
 from datetime import datetime, timezone
+import os
 
 from api import db
 from sqlalchemy.orm import foreign
+
+from sqlalchemy.dialects.postgresql import JSONB
 
 from sqlalchemy import and_
 
@@ -157,7 +160,10 @@ class Answer(db.Model):
         if self.image_path:
             # Return a stable API path that the frontend can request from the dev server,
             # e.g. http://localhost:8080/api/v1/bd/uploads/student_answers/<filename>
-            return f"http://localhost:8080/api/v1/bd/uploads/student_answers/{self.image_path}"
+            base_url = os.getenv('PUBLIC_API_BASE_URL', '').rstrip('/')
+            if not base_url:
+                base_url = "https://api.taya-dev.tech"
+            return f"{base_url}/api/v1/bd/uploads/student_answers/{self.image_path}"
         return None
 
     def to_dict(self):
@@ -382,7 +388,8 @@ class Student(db.Model):
     firstname     = db.Column(db.String(50), nullable=False)
     surname       = db.Column(db.String(50), nullable=False)
     othernames    = db.Column(db.String(50))
-    hobbies       = db.Column(db.JSON, default=list)
+    # hobbies       = db.Column(db.JSON, default=list)
+    hobbies = db.Column(JSONB, default=list)
 
     # student relates directly to units
     units = db.relationship(
